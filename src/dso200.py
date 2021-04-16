@@ -1,3 +1,4 @@
+#!/usr/bin/env python2
 # -*- coding: utf-8 -*-
 """
 Module name: dso200
@@ -58,7 +59,7 @@ def generate_lut():
         lu_table.append(pixel888)
 
 class Dso200:
-    def __init__(self, interface):
+    def __init__(self, interface=""):
         if(os.name=='posix'): #unix
             if(os.uname()[1]=='raspberrypi'):
                 self.osname='pi'
@@ -255,9 +256,8 @@ class Dso200:
                 fWave[x]=float(self.iWave[ch][i])*dv
         return fWave
 
-    def readRawDataFile(self,  fileName):
+    def readRawDataFile(self,  fileName, add_to_channels=False):
         #Check file format(csv or lsf)
-        self.info=[[], []]
         if(fileName.lower().endswith('.csv')):
             self.dataType='csv'
         elif(fileName.lower().endswith('.lsf')):
@@ -280,7 +280,8 @@ class Dso200:
         else:
             info=f.readline().split(';') #The last item will be '\n'.
             #print len(info),  info
-            if(info[0].split('Format,')[1]!='0.20'): #Check format version
+            # if(info[0].split('Format,')[1]!='0.20'): #Check format version # MRI: FIXED to 2.0E
+            if(info[0].split('Format,')[1]!='2.0E'): # MRI: FIXED to 2.0E
                 f.close()
                 print('Format error!')
                 return -1
@@ -295,10 +296,22 @@ class Dso200:
         f.close()
 
         if(count==1): #1 channel
-            ch=0
-            self.iWave[ch]=[0]*self.points_num
             sCh=[s for s in info if "Source" in s]
             self.ch_list.append(sCh[0].split(',')[1])
+            if add_to_channels:
+                ch = len(self.ch_list) - 1
+                if ch > 1:
+                    self.iWave.append([])
+                    self.vdiv.append([])
+                    self.vunit.append([])
+                    self.dt.append([])
+                    self.vpos.append([])
+                    self.hpos.append([])
+                    self.info.append([])
+            else:
+                self.info = [[], []]
+                ch = 0  # Orig.: always use ch0
+            self.iWave[ch]=[0]*self.points_num
             sVunit = [s for s in info if "Vertical Units" in s]
             self.vunit[ch] =sVunit[0].split(',')[1]      #Get vertical units.
             sDv = [s for s in info if "Vertical Scale" in s]
@@ -330,6 +343,7 @@ class Dso200:
             del wave
             return 1
         elif(count==2): #2 channel, csv file only.
+            self.info = [[], []]
             #write waveform's info to self.info[]
             for ch in xrange(count):
                 self.info[ch].append(info[0])
@@ -361,6 +375,7 @@ class Dso200:
                     index=2*ch
                     self.iWave[ch][i]=int(str[index])
         else:
+            self.info = [[], []]
             return -1
 
         del wave
@@ -374,3 +389,81 @@ class Dso200:
             return True
         else:
             return False
+
+    def saveCsv(self, out_file_path):
+        num=len(self.ch_list)
+        #print num
+        for ch in xrange(num):
+            if(self.info[ch]==[]):
+                print('Failed to save data, raw data information is required!')
+                return
+        f = open(out_file_path, 'wb')
+        item=len(self.info[0])
+        #Write file header.
+        f.write('%s,\r\n' % self.info[0][0])
+        for x in xrange(1,  25):
+            str=''
+            for ch in xrange(num):
+                str+=('%s,' % self.info[ch][x])
+            str+='\r\n'
+            f.write(str)
+        str=''
+        if(num==1):
+            str+=('%s,' % self.info[0][25])
+        else:
+            for ch in xrange(num):
+                str+=('%s,,' % self.info[ch][25])
+        str+='\r\n'
+        f.write(str)
+        #Write raw data.
+        item=len(self.iWave[0])
+        #print item
+        tenth=int(item/10)
+        n_tenth=tenth-1
+        percent=10
+        for x in xrange(item):
+            str=''
+            if(num==1):
+                str+=('%s,' % self.iWave[0][x])
+            else:
+                for ch in xrange(num):
+                    str+=('%s,,' % self.iWave[ch][x])
+            str+='\r\n'
+            f.write(str)
+            if(x==n_tenth):
+                n_tenth+=tenth
+                print('%3d %% Saved\r'%percent),
+                percent+=10
+        f.close()
+
+
+if __name__ == "__main__":
+    """
+    Convert all LSF files found in pwd and directories below into one CVS file per directory.
+    This is to ease converting of files/directories produced by a Gwinstek MSO-2000EA hardcopy
+    recordings to multi-channel CSVs (without the need to install long outdated libraries).
+    
+    TODO: should urgently be translated to Python3!
+    """
+    from os import getcwd, walk
+    from os.path import exists, join
+    dir_ = getcwd()
+    for dirpath, dirnames, filenames in walk(dir_):
+        no_lsf_files = 0
+        dso = Dso200()
+        for filename in filenames:
+            if not (filename.endswith(".LSF") or filename.endswith(".lsf")):
+                continue
+            fp = join(dirpath, filename)
+            no_lsf_files += 1
+            dso.readRawDataFile(fp, add_to_channels=True)
+        if no_lsf_files == 0:
+            continue
+        outfile = join(dirpath, dirpath.split("/")[-1]+"_combined.csv")
+        if exists(outfile):
+            print "Outfile %s already exist -> skipping" %outfile
+        else:
+            dso.saveCsv(outfile)
+            print "Wrote %s channels to file %s" %(no_lsf_files, outfile)
+
+    print "Done."
